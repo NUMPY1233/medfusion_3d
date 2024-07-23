@@ -369,7 +369,7 @@ class VQVAE(BasicModel):
 
     def _step(self, batch: dict, batch_idx: int, state: str, step: int, optimizer_idx:int):
         # ------------------------- Get Source/Target ---------------------------
-        x = batch['source']
+        x = batch['target']
         target = x
 
         # ------------------------- Run Model ---------------------------
@@ -523,7 +523,7 @@ class VQGAN(VeryBasicModel):
 
     def _step(self, batch: dict, batch_idx: int, state: str, step: int, optimizer_idx:int):
         # ------------------------- Get Source/Target ---------------------------
-        x = batch['source']
+        x = batch['target']
         target = x 
 
         # ------------------------- Run Model ---------------------------
@@ -620,12 +620,12 @@ class VQGAN(VeryBasicModel):
 class VAE(BasicModel):
     def __init__(
         self,
-        in_channels=3, 
-        out_channels=3, 
+        in_channels=1, 
+        out_channels=1, 
         spatial_dims = 2,
         emb_channels = 4,
         hid_chs =    [ 64, 128,  256, 512],
-        kernel_sizes=[ 3,  3,   3,    3],
+        kernel_sizes=[ 3,  3,   3,   3],
         strides =    [ 1,  2,   2,   2],
         norm_name = ("GROUP", {'num_groups':8, "affine": True}),
         act_name=("Swish", {}),
@@ -819,7 +819,7 @@ class VAE(BasicModel):
 
     def _step(self, batch: dict, batch_idx: int, state: str, step: int, optimizer_idx:int):
         # ------------------------- Get Source/Target ---------------------------
-        x = batch['source']
+        x = batch['target']
         target = x
 
         # ------------------------- Run Model ---------------------------
@@ -853,6 +853,7 @@ class VAE(BasicModel):
             save_image(images, path_out/f'sample_{log_step}.png', nrow=x.shape[0], normalize=True)
     
         return loss
+
 
 
 
@@ -974,7 +975,7 @@ class VAEGAN(VeryBasicModel):
 
     def _step(self, batch: dict, batch_idx: int, state: str, step: int, optimizer_idx:int):
         # ------------------------- Get Source/Target ---------------------------
-        x = batch['source']
+        x = batch['target']
         target = x 
 
         # ------------------------- Run Model ---------------------------
@@ -1063,3 +1064,118 @@ class VAEGAN(VeryBasicModel):
         d_weight = torch.norm(rec_grads) / (torch.norm(gan_grads) + eps) 
         d_weight = torch.clamp(d_weight, 0.0, 1e4)
         return d_weight.detach()
+    
+
+class Latent_Embedder(BasicModel):
+    def __init__(
+        self,
+        in_channels=1, 
+        out_channels=1, 
+        spatial_dims = 3,
+        emb_channels = 4,
+        num_embeddings = 8192,
+        hid_chs =    [32, 64, 128,  256],
+        kernel_sizes=[ 3,  3,   3,    3],
+        strides =    [ 1,  2,   2,   2],
+        norm_name = ("GROUP", {'num_groups':32, "affine": True}),
+        act_name=("Swish", {}),
+        dropout=0.0,
+        use_res_block=True,
+        deep_supervision=False,
+        learnable_interpolation=True,
+        use_attention='none',
+        beta = 0.25,
+
+        perceiver = LPIPS, 
+        perceiver_kwargs = {},
+        
+        lr_scheduler= None, 
+        lr_scheduler_kwargs={},
+        sample_every_n_steps = 1000
+
+    ):
+        super().__init__(
+            lr_scheduler=lr_scheduler,
+            lr_scheduler_kwargs=lr_scheduler_kwargs
+        )
+        self.sample_every_n_steps=sample_every_n_steps
+        self.perceiver = perceiver(**perceiver_kwargs).eval() if perceiver is not None else None 
+        use_attention = use_attention if isinstance(use_attention, list) else [use_attention]*len(strides) 
+        self.depth = len(strides)
+        self.deep_supervision = deep_supervision
+
+        # ----------- In-Convolution ------------
+        ConvBlock = UnetResBlock if use_res_block else UnetBasicBlock 
+        self.inc = ConvBlock(spatial_dims, in_channels, hid_chs[0], kernel_size=kernel_sizes[0], stride=strides[0],
+                                  act_name=act_name, norm_name=norm_name)
+
+        # ----------- Encoder ----------------
+        self.encoders = nn.ModuleList([
+            DownBlock(
+                spatial_dims, 
+                hid_chs[i-1], 
+                hid_chs[i], 
+                kernel_sizes[i], 
+                strides[i],
+                kernel_sizes[i], 
+                norm_name,
+                act_name,
+                dropout,
+                use_res_block,
+                learnable_interpolation,
+                use_attention[i])
+            for i in range(1, self.depth)
+        ])
+
+        # ----------- Out-Encoder ------------
+        self.out_enc = BasicBlock(spatial_dims, hid_chs[-1], emb_channels, 1)
+
+
+        # ----------- Quantizer --------------
+        self.quantizer = VectorQuantizer(
+            num_embeddings=num_embeddings, 
+            emb_channels=emb_channels,
+            beta=beta
+        )    
+
+        # ----------- In-Decoder ------------
+        self.inc_dec = ConvBlock(spatial_dims, emb_channels, hid_chs[-1], 3, act_name=act_name, norm_name=norm_name)
+
+        # ------------ Decoder ----------
+        self.decoders = nn.ModuleList([
+            UpBlock(
+                spatial_dims, 
+                hid_chs[i+1], 
+                hid_chs[i],
+                kernel_size=kernel_sizes[i+1], 
+                stride=strides[i+1], 
+                upsample_kernel_size=strides[i+1],
+                norm_name=norm_name,  
+                act_name=act_name, 
+                dropout=dropout,
+                use_res_block=use_res_block,
+                learnable_interpolation=learnable_interpolation,
+                use_attention=use_attention[i],
+                skip_channels=0)
+            for i in range(self.depth-1)
+        ])
+
+        # --------------- Out-Convolution ----------------
+        self.outc = BasicBlock(spatial_dims, hid_chs[0], out_channels, 1, zero_conv=True)
+        if isinstance(deep_supervision, bool):
+            deep_supervision = self.depth-1 if deep_supervision else 0 
+        self.outc_ver = nn.ModuleList([
+            BasicBlock(spatial_dims, hid_chs[i], out_channels, 1, zero_conv=True) 
+            for i in range(1, deep_supervision+1)
+        ])
+
+    
+    def forward(self, x):
+        h = self.inc(x)
+        for i in range(len(self.encoders)):
+            h = self.encoders[i](h)
+        z = self.out_enc(h)
+        # norm to 0-1
+        # z = (z - z.min()) / (z.max() - z.min())
+        return z # 2 * z - 1 
+            

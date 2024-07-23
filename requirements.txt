@@ -1,6 +1,4 @@
 torch # pip install torch --extra-index-url https://download.pytorch.org/whl/cu113
-numpy 
-sklearn
 pytorch-lightning
 pytorch_msssim
 monai

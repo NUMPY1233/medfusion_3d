@@ -6,6 +6,7 @@ from monai.networks.blocks import UnetOutBlock
 from medical_diffusion.models.utils.conv_blocks import BasicBlock, UpBlock, DownBlock, UnetBasicBlock, UnetResBlock, save_add, BasicDown, BasicUp, SequentialEmb
 from medical_diffusion.models.embedders import TimeEmbbeding
 from medical_diffusion.models.utils.attention_blocks import Attention, zero_module
+from medical_diffusion.models.embedders import Latent_Embedder
 
 
 
@@ -25,7 +26,7 @@ class UNet(nn.Module):
             norm_name = ("GROUP", {'num_groups':32, "affine": True}),
             time_embedder=TimeEmbbeding,
             time_embedder_kwargs={},
-            cond_embedder=None,
+            cond_embedder=Latent_Embedder,
             cond_embedder_kwargs={},
             deep_supervision=True, # True = all but last layer, 0/False=disable, 1=only first layer, ... 
             use_res_block=True,
@@ -54,10 +55,8 @@ class UNet(nn.Module):
         # ------------- Condition-Embedder-----------
         if cond_embedder is not None:
             self.cond_embedder=cond_embedder(**cond_embedder_kwargs)
-            cond_emb_dim = self.cond_embedder.emb_dim
         else:
             self.cond_embedder = None 
-            cond_emb_dim = None 
 
 
         ConvBlock = UnetResBlock if use_res_block else UnetBasicBlock
@@ -238,12 +237,16 @@ class UNet(nn.Module):
         else:
             cond_emb = self.cond_embedder(condition) # [B, C]
         
-        emb = save_add(time_emb, cond_emb)
-       
+        # emb = save_add(time_emb, cond_emb)
+        emb = time_emb
+            
         # ---------- Self-conditioning-----------
         if self.use_self_conditioning:
             self_cond =  torch.zeros_like(x_t) if self_cond is None else x_t 
-            x_t = torch.cat([x_t, self_cond], dim=1)  
+            x_t = torch.cat([x_t, cond_emb], dim=1)   # cond_with_tumor_mask
+    
+        # --------- Condition with tumor mask
+        x_t = torch.cat([x_t, cond_emb], dim=1)   # cond_with_tumor_mask
     
         # --------- Encoder --------------
         x = [self.in_conv(x_t)]
@@ -272,7 +275,7 @@ class UNet(nn.Module):
 
 
 if __name__=='__main__':
-    model = UNet(in_ch=3, use_res_block=False, learnable_interpolation=False)
+    model = UNet(in_ch=1, use_res_block=False, learnable_interpolation=False)
     input = torch.randn((1,3,16,32,32))
     time = torch.randn((1,))
     out_hor, out_ver = model(input, time)

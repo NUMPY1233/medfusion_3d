@@ -1,6 +1,13 @@
+# 忽略所有文件和文件夹
 /**/*
+
+# 取消忽略所有文件和文件夹
 !/**/
+
+# 忽略特定文件夹
 /venv/
+
+# 不忽略特定文件类型
 !*.ipynb
 !*.gitignore
 !*.md
@@ -9,17 +16,21 @@
 !*.yml
 !*.ui
 !*.yaml
-
 !requirements.txt
 !version.txt
 
-/docs/build
-!/docs/Makefile
+# 忽略特定文件类型
+*.nii.gz
+*.nii
 
+# 忽略特定文件夹及其子文件夹
+/docs/build
+/Task107_hecktor2021
 /build/
 
-/runs 
 /results
 /scripts/local_trash
 
+# 不忽略特定路径和文件
+!/docs/Makefile
 !/media/**

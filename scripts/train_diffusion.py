@@ -1,5 +1,7 @@
 
 from email.mime import audio
+import sys
+sys.path.append("..")
 from pathlib import Path
 from datetime import datetime
 
@@ -11,55 +13,85 @@ import numpy as np
 import torchio as tio 
 
 from medical_diffusion.data.datamodules import SimpleDataModule
-from medical_diffusion.data.datasets import AIROGSDataset, MSIvsMSS_2_Dataset, CheXpert_2_Dataset
+from medical_diffusion.data.datasets import NiftiPairImageGenerator
 from medical_diffusion.models.pipelines import DiffusionPipeline
 from medical_diffusion.models.estimators import UNet
 from medical_diffusion.external.stable_diffusion.unet_openai import UNetModel
 from medical_diffusion.models.noise_schedulers import GaussianNoiseScheduler
-from medical_diffusion.models.embedders import LabelEmbedder, TimeEmbbeding
+from medical_diffusion.models.embedders import Latent_Embedder, TimeEmbbeding
 from medical_diffusion.models.embedders.latent_embedders import VAE, VAEGAN, VQVAE, VQGAN
-
+from torchvision.transforms import RandomCrop, Compose, ToPILImage, Resize, ToTensor, Lambda
 import torch.multiprocessing
 torch.multiprocessing.set_sharing_strategy('file_system')
+import argparse
 
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument('-i', '--inputfolder', type=str, default="/home/zyl/working/202406_01/Task107_hecktor2021/labelsTrain/")
+parser.add_argument('-t', '--targetfolder', type=str, default="/home/zyl/working/202406_01/Task107_hecktor2021/imagesTrain/")
+parser.add_argument('--savefolder', type=str, default="/home/zyl/working/202406_01/results")
+parser.add_argument('--input_size', type=int, default=128)
+parser.add_argument('--depth_size', type=int, default=128)
+parser.add_argument('--num_res_blocks', type=int, default=1)
+parser.add_argument('--num_class_labels', type=int, default=2)
+parser.add_argument('--train_lr', type=float, default=1e-4)
+parser.add_argument('--batchsize', type=int, default=2)
+parser.add_argument('--epochs', type=int, default=500000)
+parser.add_argument('--timesteps', type=int, default=250)
+parser.add_argument('--save_and_sample_every', type=int, default=1000)
+parser.add_argument('--with_condition', default='True', action='store_true')
+parser.add_argument('-r', '--resume_weight', type=str, default="")
+args = parser.parse_args()
+
+
+inputfolder = args.inputfolder
+targetfolder = args.targetfolder
+input_size = args.input_size
+depth_size = args.depth_size
+num_res_blocks = args.num_res_blocks
+num_class_labels = args.num_class_labels
+save_and_sample_every = args.save_and_sample_every
+with_condition = args.with_condition
+resume_weight = args.resume_weight
+train_lr = args.train_lr
+batchsize = args.batchsize
+epochs = args.epochs
+
+transform = Compose([
+    Lambda(lambda t: torch.tensor(t).float()),
+    Lambda(lambda t: (t * 2) - 1),
+    Lambda(lambda t: t.transpose(3, 1)),
+])
+
+input_transform = Compose([
+    Lambda(lambda t: torch.tensor(t).float()),
+    Lambda(lambda t: t.transpose(3, 1)),
+])
 
 
 if __name__ == "__main__":
-    # ------------ Load Data ----------------
-    # ds = AIROGSDataset(
-    #     crawler_ext='jpg',
-    #     augment_horizontal_flip = False,
-    #     augment_vertical_flip = False, 
-    #     # path_root='/home/gustav/Documents/datasets/AIROGS/data_256x256/',
-    #     path_root='/mnt/hdd/datasets/eye/AIROGS/data_256x256',
-    # )
 
-    # ds = MSIvsMSS_2_Dataset(
-    #     crawler_ext='jpg',
-    #     image_resize=None,
-    #     image_crop=None,
-    #     augment_horizontal_flip=False,
-    #     augment_vertical_flip=False, 
-    #     # path_root='/home/gustav/Documents/datasets/Kather_2/train',
-    #     path_root='/mnt/hdd/datasets/pathology/kather_msi_mss_2/train/',
-    # )
-
-    ds = CheXpert_2_Dataset( #  256x256
-        augment_horizontal_flip=False,
-        augment_vertical_flip=False,
-        path_root = '/mnt/hdd/datasets/chest/CheXpert/ChecXpert-v10/preprocessed_tianyu'
+    dataset = NiftiPairImageGenerator(
+        inputfolder,
+        targetfolder,
+        input_size=input_size,
+        depth_size=depth_size,
+        transform=input_transform if with_condition else transform,
+        target_transform=transform,
+        full_channel_mask=True
     )
-  
+
+   
     dm = SimpleDataModule(
-        ds_train = ds,
-        batch_size=32, 
-        # num_workers=0,
-        pin_memory=True,
-        # weights=ds.get_weights()
+        ds_train = dataset,
+        batch_size=batchsize, 
+        # num_workers=40,
+        pin_memory=True
     ) 
     
     current_time = datetime.now().strftime("%Y_%m_%d_%H%M%S")
-    path_run_dir = Path.cwd() / 'runs' / str(current_time)
+    path_run_dir = Path.cwd() / 'runs' / 'LDM_VQVAE'/ str(current_time)
     path_run_dir.mkdir(parents=True, exist_ok=True)
     accelerator = 'gpu' if torch.cuda.is_available() else 'cpu'
 
@@ -67,12 +99,8 @@ if __name__ == "__main__":
 
     # ------------ Initialize Model ------------
     # cond_embedder = None 
-    cond_embedder = LabelEmbedder
-    cond_embedder_kwargs = {
-        'emb_dim': 1024,
-        'num_classes': 2
-    }
- 
+    cond_embedder = Latent_Embedder
+
 
     time_embedder = TimeEmbbeding
     time_embedder_kwargs ={
@@ -83,15 +111,14 @@ if __name__ == "__main__":
     noise_estimator = UNet
     noise_estimator_kwargs = {
         'in_ch':8, 
-        'out_ch':8, 
-        'spatial_dims':2,
+        'out_ch':4, 
+        'spatial_dims':3,
         'hid_chs':  [  256, 256, 512, 1024],
         'kernel_sizes':[3, 3, 3, 3],
         'strides':     [1, 2, 2, 2],
         'time_embedder':time_embedder,
         'time_embedder_kwargs': time_embedder_kwargs,
         'cond_embedder':cond_embedder,
-        'cond_embedder_kwargs': cond_embedder_kwargs,
         'deep_supervision': False,
         'use_res_block':True,
         'use_attention':'none',
@@ -110,8 +137,8 @@ if __name__ == "__main__":
     # ------------ Initialize Latent Space  ------------
     # latent_embedder = None 
     # latent_embedder = VQVAE
-    latent_embedder = VAE
-    latent_embedder_checkpoint = 'runs/2022_12_12_133315_chest_vaegan/last_vae.ckpt'
+    latent_embedder = VQVAE # VQVAE: "/home/local/PARTNERS/rh384/runs/VAE/epoch=114-step=23000.ckpt"
+    latent_embedder_checkpoint = "/home/zyl/working/202406_01/runs/VQVAE/2024_01_05_200333/epoch=114-step=23000.ckpt"
    
     # ------------ Initialize Pipeline ------------
     pipeline = DiffusionPipeline(
@@ -124,11 +151,12 @@ if __name__ == "__main__":
         estimator_objective='x_T',
         estimate_variance=False, 
         use_self_conditioning=False, 
+        num_samples = 1,
         use_ema=False,
         classifier_free_guidance_dropout=0.5, # Disable during training by setting to 0
         do_input_centering=False,
         clip_x0=False,
-        sample_every_n_steps=1000
+        sample_every_n_steps=save_and_sample_every
     )
     
     # pipeline_old = pipeline.load_from_checkpoint('runs/2022_11_27_085654_chest_diffusion/last.ckpt')
@@ -137,7 +165,6 @@ if __name__ == "__main__":
     # -------------- Training Initialization ---------------
     to_monitor = "train/loss"  # "pl/val_loss" 
     min_max = "min"
-    save_and_sample_every = 100
 
     early_stopping = EarlyStopping(
         monitor=to_monitor,
@@ -149,13 +176,13 @@ if __name__ == "__main__":
         dirpath=str(path_run_dir), # dirpath
         monitor=to_monitor,
         every_n_train_steps=save_and_sample_every,
-        save_last=True,
+        save_last=False,
         save_top_k=2,
         mode=min_max,
     )
     trainer = Trainer(
         accelerator=accelerator,
-        # devices=[0],
+        devices=[3],
         # precision=16,
         # amp_backend='apex',
         # amp_level='O2',
@@ -170,7 +197,7 @@ if __name__ == "__main__":
         # limit_train_batches=1000,
         limit_val_batches=0, # 0 = disable validation - Note: Early Stopping no longer available 
         min_epochs=100,
-        max_epochs=1001,
+        max_epochs=epochs,
         num_sanity_val_steps=2,
     )
     

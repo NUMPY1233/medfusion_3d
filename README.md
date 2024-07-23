@@ -46,7 +46,7 @@ Get Started
 
 3 Train Diffusion 
 ----------------
-* Go to [scripts/train_diffusion.py](scripts/train_diffusion.py) and import/load your Dataset as before.
+* Go to [scripts/train_diffusion.py](scripts/train_diffusion_ct.py) and import/load your Dataset as before.
 * Load your pre-trained VAE or VAEGAN with `latent_embedder_checkpoint=...` 
 * Use `cond_embedder = LabelEmbedder` for conditional training, otherwise  `cond_embedder = None`  
 

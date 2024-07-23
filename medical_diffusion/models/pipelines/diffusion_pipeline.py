@@ -11,7 +11,8 @@ import streamlit as st
 from medical_diffusion.models import BasicModel
 from medical_diffusion.utils.train_utils import EMAModel
 from medical_diffusion.utils.math_utils import kl_gaussians
-
+import nibabel as nib
+import numpy as np
 
 
 
@@ -77,8 +78,8 @@ class DiffusionPipeline(BasicModel):
 
     def _step(self, batch: dict, batch_idx: int, state: str, step: int, optimizer_idx:int):
         results = {}
-        x_0 = batch['source']
-        condition = batch.get('target', None) 
+        x_0 = batch['target']
+        condition = batch['input']
 
         # Embed into latent space or normalize 
         if self.latent_embedder is not None:
@@ -87,6 +88,7 @@ class DiffusionPipeline(BasicModel):
                 x_0 = self.latent_embedder.encode(x_0)
         
         if self.do_input_centering:
+            x_0 = (x_0 - x_0.min())/(x_0.max() - x_0.min())
             x_0 = 2*x_0-1 # [0, 1] -> [-1, 1]
 
         # if self.clip_x0:
@@ -119,8 +121,8 @@ class DiffusionPipeline(BasicModel):
                     raise NotImplementedError(f"Option estimator_target={self.estimator_objective} not supported.")
             
         # Classifier free guidance 
-        if torch.rand(1)<self.classifier_free_guidance_dropout:
-            condition = None 
+        # if torch.rand(1)<self.classifier_free_guidance_dropout:
+        #     condition = None 
        
         # Run Denoise 
         pred, pred_vertical = noise_estimator(x_t, t, condition, self_cond) 
@@ -209,14 +211,10 @@ class DiffusionPipeline(BasicModel):
 
             sample_cond = condition[0:self.num_samples] if condition is not None else None
             sample_img = self.sample(num_samples=self.num_samples, img_size=x_0.shape[1:], condition=sample_cond).detach()
-             
+            
+            sample_img = (sample_img + 1)/2
             log_step = self.global_step // self.sample_every_n_steps
-            # self.logger.experiment.add_images("predict_img", norm(torch.moveaxis(pred[0,-1:], 0,-1)), global_step=self.current_epoch, dataformats=dataformats) 
-            # self.logger.experiment.add_images("target_img", norm(torch.moveaxis(target[0,-1:], 0,-1)), global_step=self.current_epoch, dataformats=dataformats) 
-            
-            # self.logger.experiment.add_images("source_img", norm(torch.moveaxis(x_0[0,-1:], 0,-1)), global_step=log_step, dataformats=dataformats) 
-            # self.logger.experiment.add_images("sample_img", norm(torch.moveaxis(sample_img[0,-1:], 0,-1)), global_step=log_step, dataformats=dataformats) 
-            
+
             path_out = Path(self.logger.log_dir)/'images'
             path_out.mkdir(parents=True, exist_ok=True)
             # for 3D images use depth as batch :[D, C, H, W], never show more than 32 images 
@@ -224,7 +222,9 @@ class DiffusionPipeline(BasicModel):
                 return (image if image.ndim<5 else torch.swapaxes(image[0], 0, 1))
             images = depth2batch(sample_img)[:32]
             save_image(images, path_out/f'sample_{log_step}.png', normalize=True)
-        
+            sample_img1 = sample_img.squeeze(0).squeeze(0).detach().cpu().numpy()
+            nifti_img = nib.Nifti1Image(sample_img1, affine = np.eye(4))
+            nib.save(nifti_img, path_out/f'sample_{log_step}.nii.gz')        
         
         return loss
 

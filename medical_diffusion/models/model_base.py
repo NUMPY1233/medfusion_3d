@@ -6,7 +6,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import pytorch_lightning as pl
-from pytorch_lightning.utilities.cloud_io import load as pl_load
+# from pytorch_lightning.utilities.cloud_io import load as pl_load
+from lightning_fabric.utilities.cloud_io import _load as pl_load
 from pytorch_lightning.utilities.migration import pl_legacy_patch
 
 class VeryBasicModel(pl.LightningModule):

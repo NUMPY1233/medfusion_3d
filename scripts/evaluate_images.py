@@ -11,15 +11,16 @@ from torch.utils.data import TensorDataset, Subset
 from torchmetrics.image.fid import FrechetInceptionDistance as FID
 from torchmetrics.image.inception import InceptionScore as IS
 
+from medical_diffusion.data.datasets import SimpleDataset3D
 from medical_diffusion.metrics.torchmetrics_pr_recall import ImprovedPrecessionRecall
 
 
 # ----------------Settings --------------
-batch_size = 100
+batch_size = 1 #100
 max_samples = None # set to None for all 
 # path_out = Path.cwd()/'results'/'MSIvsMSS_2'/'metrics'
 # path_out = Path.cwd()/'results'/'AIROGS'/'metrics'
-path_out = Path.cwd()/'results'/'CheXpert'/'metrics'
+path_out = Path.cwd()/'results'/'pet'/'metrics'
 path_out.mkdir(parents=True, exist_ok=True)
 
 
@@ -42,12 +43,14 @@ pil2torch = lambda x: torch.as_tensor(np.array(x)).moveaxis(-1, 0) # In contrast
 # ds_fake = ImageFolder('/mnt/hdd/datasets/eye/AIROGS/data_generated_stylegan3/', transform=pil2torch) 
 # ds_fake = ImageFolder('/mnt/hdd/datasets/eye/AIROGS/data_generated_diffusion', transform=pil2torch) 
 
-ds_real = ImageFolder('/mnt/hdd/datasets/chest/CheXpert/ChecXpert-v10/reference/', transform=pil2torch)
+path='/home/zyl/working/202406_01/scripts/runs/results/metrics/nocrop_ct'
+# ds_real = ImageFolder('/mnt/hdd/datasets/chest/CheXpert/ChecXpert-v10/reference/', transform=pil2torch)
 # ds_fake = ImageFolder('/mnt/hdd/datasets/chest/CheXpert/ChecXpert-v10/generated_progan/', transform=pil2torch) 
-ds_fake = ImageFolder('/mnt/hdd/datasets/chest/CheXpert/ChecXpert-v10/generated_diffusion3_250/', transform=pil2torch) 
-
-ds_real.samples = ds_real.samples[slice(max_samples)]
-ds_fake.samples = ds_fake.samples[slice(max_samples)]
+# ds_fake = ImageFolder('/mnt/hdd/datasets/chest/CheXpert/ChecXpert-v10/generated_diffusion3_250/', transform=pil2torch)
+ds_real=SimpleDataset3D(path,keyword='target')
+# ds_real.samples = ds_real.samples[slice(max_samples)]
+ds_fake=SimpleDataset3D(path,keyword='sample')
+# ds_fake.samples = ds_fake.samples[slice(max_samples)]
 
 
 # --------- Select specific class ------------
@@ -67,7 +70,7 @@ logger.info(f"Samples Real: {len(ds_real)}")
 logger.info(f"Samples Fake: {len(ds_fake)}")
 
 # ------------- Init Metrics ----------------------
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
+device = 'cuda:2' if torch.cuda.is_available() else 'cpu'
 calc_fid = FID().to(device) # requires uint8
 # calc_is = IS(splits=1).to(device) # requires uint8, features must be 1008 see https://github.com/openai/guided-diffusion/blob/22e0df8183507e13a7813f8d38d51b072ca1e67c/evaluations/evaluator.py#L603 
 calc_pr = ImprovedPrecessionRecall(splits_real=1, splits_fake=1).to(device)
@@ -77,7 +80,7 @@ calc_pr = ImprovedPrecessionRecall(splits_real=1, splits_fake=1).to(device)
 
 # --------------- Start Calculation -----------------
 for real_batch in tqdm(dm_real):
-    imgs_real_batch = real_batch[0].to(device)
+    imgs_real_batch = real_batch['source'].to(device).type(torch.uint8)
 
     # -------------- FID -------------------
     calc_fid.update(imgs_real_batch, real=True)
@@ -90,7 +93,7 @@ for real_batch in tqdm(dm_real):
 
 
 for fake_batch in tqdm(dm_fake):
-    imgs_fake_batch = fake_batch[0].to(device)
+    imgs_fake_batch = fake_batch['source'].to(device).type(torch.uint8)  # Ensure uint8 type
 
     # -------------- FID -------------------
     calc_fid.update(imgs_fake_batch, real=False)

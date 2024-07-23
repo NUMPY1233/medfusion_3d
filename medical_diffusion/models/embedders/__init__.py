@@ -1,2 +1,2 @@
 from .time_embedder import TimeEmbbeding, LearnedSinusoidalPosEmb, SinusoidalPosEmb
-from .cond_embedders import LabelEmbedder
+from .latent_embedders import Latent_Embedder
